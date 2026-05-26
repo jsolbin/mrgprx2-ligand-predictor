@@ -1,0 +1,10 @@
+{
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore",
+  "typescript.tsdk": "frontend/node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.extraPaths": ["./backend"],
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python"
+}
