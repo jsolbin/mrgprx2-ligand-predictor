@@ -1,24 +1,21 @@
-import httpx
-
 from app.schemas import CompoundSearchResponse
 from app.services.mock_data import MOCK_COMPOUNDS, get_demo_svg
-from app.services.pubchem_service import search_pubchem_by_name
 
 
 def search_compound_by_name(name: str) -> CompoundSearchResponse:
-    try:
-        pubchem_result = search_pubchem_by_name(name)
-    except httpx.HTTPError:
-        pubchem_result = None
-
-    if pubchem_result is not None:
-        return pubchem_result
-
     normalized = name.strip().lower()
     compound = MOCK_COMPOUNDS.get(normalized)
 
     if compound is None:
-        raise LookupError(f"Compound '{name}' was not found in PubChem.")
+        compound = {
+            "name": name.strip(),
+            "cid": None,
+            "smiles": "C",
+            "inchi_key": None,
+            "molecular_weight": 16.04,
+            "logp": 0.64,
+            "tpsa": 0.00,
+        }
 
     return CompoundSearchResponse(
         **compound,

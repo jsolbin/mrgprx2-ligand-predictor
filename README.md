@@ -36,9 +36,9 @@ This repository is now initialized with a working full-stack skeleton:
 - `frontend/`: Next.js App Router project with a compound search page, prediction panel, and probability chart
 - `backend/`: FastAPI app with `GET /health`, `GET /compound/search`, and `POST /predict`
 - `backend/data/mrgprx2_ligands.sample.csv`: starter dataset template
-- PubChem PUG REST integration for compound lookup, plus mock fallback data for seed examples
+- Mock compound and prediction data so the UI can be wired before PubChem, RDKit, and model training are added
 
-The backend now looks up compounds from PubChem by name. RDKit and trained model inference are still not implemented, and prediction responses are still baseline mock outputs.
+The backend does not yet call PubChem or RDKit. It returns deterministic placeholder data for MVP integration.
 
 ## Local Setup
 
@@ -93,13 +93,13 @@ Returns API health status.
 Returns:
 
 - compound name
-- PubChem CID
+- PubChem CID placeholder
 - SMILES
 - InChIKey
 - molecular weight
 - LogP
 - TPSA
-- structure image from PubChem when available
+- SVG structure placeholder
 
 ### `POST /predict`
 
