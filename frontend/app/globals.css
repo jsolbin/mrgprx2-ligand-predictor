@@ -4,18 +4,55 @@
 
 :root {
   color-scheme: light;
+  --paper: #f3ede2;
+  --paper-deep: #ece4d6;
+  --ink: #122019;
+  --accent: #1d6b52;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  font-family:
+    "Avenir Next",
+    "Segoe UI",
+    "Helvetica Neue",
+    Helvetica,
+    Arial,
+    sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(201, 112, 61, 0.14), transparent 30%),
-    radial-gradient(circle at top right, rgba(29, 107, 82, 0.12), transparent 28%),
-    linear-gradient(180deg, #f8f3e8 0%, #f4efe4 100%);
-  color: #10231c;
+    radial-gradient(circle at top left, rgba(191, 123, 77, 0.11), transparent 24%),
+    radial-gradient(circle at top right, rgba(29, 107, 82, 0.11), transparent 26%),
+    linear-gradient(180deg, #f8f4ec 0%, var(--paper) 52%, var(--paper-deep) 100%);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
   box-sizing: border-box;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.font-serif {
+  font-family:
+    "Iowan Old Style",
+    "Palatino Linotype",
+    "Book Antiqua",
+    Baskerville,
+    Georgia,
+    serif;
+}
+
+::selection {
+  background: rgba(29, 107, 82, 0.16);
 }

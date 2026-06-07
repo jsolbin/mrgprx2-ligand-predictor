@@ -9,3 +9,5 @@ frontend/node_modules/
 frontend/.next/
 
 backend/.pytest_cache/
+backend/data/app.db
+backend/data/*.sqlite3
