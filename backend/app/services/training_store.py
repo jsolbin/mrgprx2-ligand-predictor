@@ -1,25 +1,28 @@
-"""Lightweight persistence for user-submitted agonist/antagonist labels.
+"""Persistence for user-submitted agonist/antagonist labels.
 
 When a user tells the app "this SMILES is an agonist/antagonist", we record
 it here (structure + label). Future predictions load this store and treat
 each entry as an additional reference ligand for similarity scoring, so the
 classifier's structural pattern-matching improves as more compounds are
 labeled - without needing a full retraining pipeline.
+
+Backed by a real database (see `app.db`) rather than a flat JSON file, so
+concurrent writes are transactionally safe and the data can live in a
+hosted Postgres instance that survives redeploys in production.
 """
 
 from __future__ import annotations
 
-import json
-import threading
 from datetime import datetime, UTC
-from pathlib import Path
 
 from rdkit import Chem
+from sqlalchemy import select
+from sqlalchemy.exc import NoResultFound
 
-STORE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "user_labels.json"
+from app.db import get_session
+from app.models import LabeledCompound
+
 VALID_LABELS = {"agonist", "antagonist", "nonbinder"}
-
-_lock = threading.Lock()
 
 
 def _rdkit_mol(smiles: str) -> Chem.Mol | None:
@@ -31,23 +34,6 @@ def _rdkit_mol(smiles: str) -> Chem.Mol | None:
         return None
     Chem.SanitizeMol(molecule, catchErrors=True)
     return molecule
-
-
-def _read_all() -> list[dict]:
-    if not STORE_PATH.exists():
-        return []
-    try:
-        with STORE_PATH.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return []
-    return data if isinstance(data, list) else []
-
-
-def _write_all(entries: list[dict]) -> None:
-    STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with STORE_PATH.open("w", encoding="utf-8") as handle:
-        json.dump(entries, handle, indent=2)
 
 
 def add_label(smiles: str, label: str, name: str | None = None, note: str | None = None) -> dict:
@@ -63,27 +49,32 @@ def add_label(smiles: str, label: str, name: str | None = None, note: str | None
 
     canonical_smiles = Chem.MolToSmiles(molecule)
 
-    entry = {
-        "name": (name or "User-labeled compound").strip() or "User-labeled compound",
-        "smiles": canonical_smiles,
-        "label": normalized_label,
-        "note": (note or "").strip() or None,
-        "source": "user",
-        "submitted_at": datetime.now(UTC).isoformat(),
-    }
+    with get_session() as session:
+        try:
+            entry = session.execute(
+                select(LabeledCompound).where(LabeledCompound.smiles == canonical_smiles)
+            ).scalar_one()
+        except NoResultFound:
+            entry = LabeledCompound(smiles=canonical_smiles)
+            session.add(entry)
 
-    with _lock:
-        entries = _read_all()
-        entries = [item for item in entries if item.get("smiles") != canonical_smiles]
-        entries.append(entry)
-        _write_all(entries)
+        entry.name = (name or "User-labeled compound").strip() or "User-labeled compound"
+        entry.label = normalized_label
+        entry.note = (note or "").strip() or None
+        entry.source = "user"
+        entry.submitted_at = datetime.now(UTC)
 
-    return entry
+        session.commit()
+        session.refresh(entry)
+        return entry.to_dict()
 
 
 def list_labels() -> list[dict]:
-    with _lock:
-        return list(_read_all())
+    with get_session() as session:
+        entries = session.execute(
+            select(LabeledCompound).order_by(LabeledCompound.submitted_at.asc())
+        ).scalars().all()
+        return [entry.to_dict() for entry in entries]
 
 
 def reference_ligands_from_labels() -> list[dict]:
@@ -92,7 +83,7 @@ def reference_ligands_from_labels() -> list[dict]:
     matching and structure-based score nudging.
     """
     ligands = []
-    for entry in _read_all():
+    for entry in list_labels():
         if entry.get("label") not in VALID_LABELS:
             continue
         ligands.append(
