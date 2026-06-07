@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import compound, health, predict
+from app.routers import compound, health, predict, training
 
 
 app = FastAPI(
@@ -25,3 +25,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(compound.router)
 app.include_router(predict.router)
+app.include_router(training.router)

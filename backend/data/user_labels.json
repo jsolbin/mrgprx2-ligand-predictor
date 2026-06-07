@@ -1,0 +1,66 @@
+[
+  {
+    "name": "6-{[3-(2-Chlorophenyl)-5-methyl-1,2-oxazole-4-carbonyl]amino}-3,3-dimethyl-7-oxo-4-thia-1-azabicyclo[3.2.0]heptane-2-carboxylic acid",
+    "smiles": "Cc1onc(-c2ccccc2Cl)c1C(=O)NC1C(=O)N2C1SC(C)(C)C2C(=O)O",
+    "label": "agonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T15:57:44.825134+00:00"
+  },
+  {
+    "name": "Ciprofloxacin",
+    "smiles": "O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O",
+    "label": "agonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T17:14:08.007228+00:00"
+  },
+  {
+    "name": "User-labeled compound",
+    "smiles": "O=C1Oc2c(OCC(O)COc3ccc4oc(C(=O)O)cc(=O)c34)cc(C(=O)O)cc2c1O",
+    "label": "antagonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T18:02:27.360160+00:00"
+  },
+  {
+    "name": "Manual SMILES Input",
+    "smiles": "O=C(O)c1cc(=O)c2c(OCC(O)COc3cc(C(=O)O)cc4c(O)C(=O)Oc34)ccc2o1",
+    "label": "antagonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T18:17:22.089135+00:00"
+  },
+  {
+    "name": "Aspirin",
+    "smiles": "CC(=O)Oc1ccccc1C(=O)O",
+    "label": "nonbinder",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T18:55:51.670479+00:00"
+  },
+  {
+    "name": "User-labeled compound",
+    "smiles": "CNCCc1ccc(OC)c(Cc2cc(CCNC)cc(Cc3cc(CCNC)ccc3OC)c2OC)c1",
+    "label": "agonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T19:54:19.983105+00:00"
+  },
+  {
+    "name": "Manual SMILES Input",
+    "smiles": "CC(C)(C)OC(=O)N[C@@H](CCC(N)=O)C(=O)N[C@@H](Cc1ccccc1)C(=O)N[C@@H](Cc1ccccc1)C(N)=O",
+    "label": "antagonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T19:54:34.364014+00:00"
+  },
+  {
+    "name": "N(alpha)-(N(alpha)-(N(alpha)-(tert-butyloxycarbonyl)glutaminyl)-N(1)-formyl-tryptophyl)phenylalanine benzyl ester",
+    "smiles": "CC(C)(C)OC(=O)N[C@@H](CCC(N)=O)C(=O)N[C@H](Cc1cn(C=O)c2ccccc12)C(=O)N[C@@H](Cc1ccccc1)C(=O)OCc1ccccc1",
+    "label": "antagonist",
+    "note": null,
+    "source": "user",
+    "submitted_at": "2026-06-07T20:17:01.100528+00:00"
+  }
+]
