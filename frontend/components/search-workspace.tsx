@@ -74,6 +74,14 @@ const QUICK_EXAMPLES = [
     name: "Cholesterol (nonbinder)",
     smiles: "CC(C)CCCC(C)C1CCC2C1(CCC3C2CC=C4C3(CCC(C4)O)C)C",
   },
+  {
+    name: "(R)-Salbutamol [stress test ①]",
+    smiles: "CC(C)(C)NC[C@@H](O)c1ccc(O)c(CO)c1",
+  },
+  {
+    name: "(S)-Salbutamol [stress test ②]",
+    smiles: "CC(C)(C)NC[C@H](O)c1ccc(O)c(CO)c1",
+  },
 ] as const;
 
 const BINDING_MODES = ["Unknown", "Allosteric", "Orthosteric"] as const;
@@ -215,7 +223,7 @@ export function SearchWorkspace() {
       ]
     : [];
 
-  async function onPredict(overrideQuery?: string) {
+  async function onPredict(overrideQuery?: string, overrideDockingScore?: number | null) {
     const targetQuery = (overrideQuery ?? query).trim();
     if (!targetQuery) {
       return;
@@ -238,7 +246,9 @@ export function SearchWorkspace() {
           compound_name: targetQuery,
           receptor: "MRGPRX2",
           experimental_data: {
-            docking_score: parseNullableNumber(experimentalData.dockingScore),
+            docking_score: overrideDockingScore !== undefined
+              ? overrideDockingScore
+              : parseNullableNumber(experimentalData.dockingScore),
             mrna_fold_change: parseNullableNumber(
               experimentalData.mrnaFoldChange,
             ),
@@ -506,16 +516,12 @@ export function SearchWorkspace() {
             </div>
           ) : null}
 
-          <details
-            className="mt-4"
-            open={experimentalDataOpen}
-            onToggle={(event) =>
-              setExperimentalDataOpen(
-                (event.currentTarget as HTMLDetailsElement).open,
-              )
-            }
-          >
-            <summary className="flex h-14 w-full cursor-pointer list-none items-center justify-between rounded-[18px] border border-[#dfe3ef] bg-white px-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]">
+          <div className="mt-4">
+            <button
+              type="button"
+              className="flex h-14 w-full cursor-pointer items-center justify-between rounded-[18px] border border-[#dfe3ef] bg-white px-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]"
+              onClick={() => setExperimentalDataOpen((v) => !v)}
+            >
               <span className="flex items-center gap-3 text-[14px] font-medium text-[#232833]">
                 <span className="text-[#747b8d]">
                   <BeakerGlyph />
@@ -523,12 +529,12 @@ export function SearchWorkspace() {
                 Experimental Data
               </span>
               <span
-                className={`text-[#7b8191] transition ${experimentalDataOpen ? "rotate-180" : ""}`}
+                className={`text-[#7b8191] transition-transform ${experimentalDataOpen ? "rotate-180" : ""}`}
               >
                 <ChevronGlyph />
               </span>
-            </summary>
-            <div className="mt-3 grid gap-3">
+            </button>
+            {experimentalDataOpen && <div className="mt-3 grid gap-3">
               <SectionLabel icon={<FlaskGlyph />}>
                 AutoDock Vina
               </SectionLabel>
@@ -549,6 +555,11 @@ export function SearchWorkspace() {
                           "dockingScore",
                           String(result.affinity_kcal_mol)
                         );
+                        // Auto-predict with the fresh docking score (state hasn't
+                        // flushed yet, so pass the score directly as an override)
+                        if (query.trim()) {
+                          onPredict(undefined, result.affinity_kcal_mol);
+                        }
                       } catch (e) {
                         setDockingError(
                           e instanceof Error ? e.message : "Docking failed"
@@ -568,11 +579,18 @@ export function SearchWorkspace() {
                       "Run AutoDock Vina (MRGPRX2 pocket)"
                     )}
                   </button>
-                  {dockingResult && (
+                  {dockingLoading && (
+                    <p className="text-[12px] text-[#6b7280] italic">
+                      AutoDock Vina is running against the MRGPRX2 orthosteric pocket (PDB 7VDH).
+                      This typically takes <span className="font-medium">10–30 seconds</span> depending on molecular size.
+                      The prediction panel will update automatically when done.
+                    </p>
+                  )}
+                  {dockingResult && !dockingLoading && (
                     <div className="rounded-lg bg-[#f0fdf4] border border-[#86efac] px-3 py-2 text-[13px] text-[#166534]">
                       Best affinity: <span className="font-semibold">{dockingResult.affinity_kcal_mol.toFixed(2)} kcal/mol</span>
-                      {" "}({dockingResult.num_modes} pose{dockingResult.num_modes !== 1 ? "s" : ""})
-                      {" — "}score auto-filled below
+                      {" "}({dockingResult.num_modes} pose{dockingResult.num_modes !== 1 ? "s" : ""}) —
+                      score filled &amp; prediction updated
                     </div>
                   )}
                   {dockingError && (
@@ -668,19 +686,15 @@ export function SearchWorkspace() {
                   />
                 </div>
               </FormCard>
-            </div>
-          </details>
+            </div>}
+          </div>
 
-          <details
-            className="mt-4"
-            open={bindingResiduesOpen}
-            onToggle={(event) =>
-              setBindingResiduesOpen(
-                (event.currentTarget as HTMLDetailsElement).open,
-              )
-            }
-          >
-            <summary className="flex h-14 w-full cursor-pointer list-none items-center justify-between rounded-[18px] border border-[#dfe3ef] bg-white px-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]">
+          <div className="mt-4">
+            <button
+              type="button"
+              className="flex h-14 w-full cursor-pointer items-center justify-between rounded-[18px] border border-[#dfe3ef] bg-white px-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]"
+              onClick={() => setBindingResiduesOpen((v) => !v)}
+            >
               <span className="flex items-center gap-3 text-[14px] font-medium text-[#232833]">
                 <span className="text-[#747b8d]">
                   <TargetGlyph />
@@ -688,12 +702,12 @@ export function SearchWorkspace() {
                 Binding Site Residues
               </span>
               <span
-                className={`text-[#7b8191] transition ${bindingResiduesOpen ? "rotate-180" : ""}`}
+                className={`text-[#7b8191] transition-transform ${bindingResiduesOpen ? "rotate-180" : ""}`}
               >
                 <ChevronGlyph />
               </span>
-            </summary>
-            <div className="mt-3 rounded-[22px] border border-[#dfe3ef] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]">
+            </button>
+            {bindingResiduesOpen && <div className="mt-3 rounded-[22px] border border-[#dfe3ef] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]">
               <div className="text-[13px] text-[#6f7584]">Binding Mode</div>
               <div className="mt-2">
                 <select
@@ -753,8 +767,8 @@ export function SearchWorkspace() {
                   );
                 })}
               </div>
-            </div>
-          </details>
+            </div>}
+          </div>
 
           {error ? (
             <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -906,6 +920,48 @@ export function SearchWorkspace() {
             </div>
           ) : prediction ? (
             <>
+              {prediction.applicability_domain && !prediction.applicability_domain.in_domain && (
+                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-amber-700">
+                    Outside Applicability Domain
+                  </div>
+                  <p className="mt-1.5 text-[13px] leading-5 text-amber-800">
+                    {prediction.applicability_domain.reason}
+                  </p>
+                </div>
+              )}
+
+              {prediction.assay_basis && (
+                <div className="mb-4 rounded-2xl border border-[#e3e7f1] bg-[#f7f8fc] px-4 py-3">
+                  <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#71788a]">
+                    Prediction Basis
+                  </div>
+                  <p className="mt-1.5 text-[12px] leading-5 text-[#6f7584]">
+                    <span className="font-medium">Readout:</span> {prediction.assay_basis.readout}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-5 text-[#6f7584]">
+                    {prediction.assay_basis.note}
+                  </p>
+                </div>
+              )}
+
+              {prediction.receptor_regulation && (
+                <div className="mb-4 rounded-2xl border border-purple-100 bg-purple-50 px-4 py-3">
+                  <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-purple-700">
+                    Receptor Regulation (independent axis)
+                  </div>
+                  {prediction.receptor_regulation.mrna_note && (
+                    <p className="mt-1.5 text-[13px] text-purple-800">{prediction.receptor_regulation.mrna_note}</p>
+                  )}
+                  {prediction.receptor_regulation.protein_note && (
+                    <p className="mt-1 text-[13px] text-purple-800">{prediction.receptor_regulation.protein_note}</p>
+                  )}
+                  <p className="mt-2 text-[12px] leading-5 text-purple-700 italic">
+                    {prediction.receptor_regulation.warning}
+                  </p>
+                </div>
+              )}
+
               <SideSection title="Factor Analysis">
                 <PanelCard>
                   <div className="grid gap-4">
