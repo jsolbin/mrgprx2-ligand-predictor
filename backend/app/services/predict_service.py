@@ -5,6 +5,8 @@ from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem, Crippen, Descriptors, Lipinski, rdMolDescriptors
 
 from app.schemas import (
+    ApplicabilityDomain,
+    AssayBasis,
     BindingAnalysis,
     DescriptorSnapshot,
     DrugLikenessCheck,
@@ -18,6 +20,7 @@ from app.schemas import (
     PredictRequest,
     PredictResponse,
     PredictionProbabilities,
+    ReceptorRegulation,
     SimilarLigand,
     WeightedFactor,
 )
@@ -61,6 +64,53 @@ BASIC_NITROGEN = Chem.MolFromSmarts("[NX3;!$(N[C,S]=[O,S])]")
 POSITIVELY_CHARGED = Chem.MolFromSmarts("[N+]")
 AMIDE = Chem.MolFromSmarts("C(=O)N")
 PHENOL = Chem.MolFromSmarts("c[OX2H]")
+
+_AROMATIC_RING = Chem.MolFromSmarts("c1ccccc1")  # any aromatic 6-ring
+_AROMATIC_ANY = Chem.MolFromSmarts("a")  # any aromatic atom
+
+_ASSAY_BASIS = {
+    "readout": "Ca²⁺ flux · mast-cell degranulation (β-hexosaminidase) · β-arrestin recruitment",
+    "note": (
+        "MRGPRX2 couples to Gq, Gi, and G12/13, and also recruits β-arrestin. "
+        "Training labels are derived primarily from Ca²⁺ flux and β-hexosaminidase "
+        "degranulation assays (Gq-pathway readouts). Biased agonism — preferential "
+        "engagement of one pathway over another — cannot be distinguished from this "
+        "model output. 'Agonist-like' means activation was observed in at least one "
+        "of those assays; it does not specify which G-protein subtype or whether "
+        "β-arrestin is recruited. Species note: labels are from human MRGPRX2 (X2) "
+        "assays; mouse MrgprB2 ortholog activity may differ."
+    ),
+}
+
+
+def _applicability_domain(molecule: Chem.Mol, descriptors: DescriptorSnapshot) -> "ApplicabilityDomain":
+    """Check if compound is within the cationic amphiphilic chemotype domain
+    of the MRGPRX2 training set. Compounds outside this domain get a warning."""
+    has_basic_n = len(molecule.GetSubstructMatches(BASIC_NITROGEN)) >= 1
+    has_aromatic = len(molecule.GetSubstructMatches(_AROMATIC_ANY)) >= 1
+    mw_ok = 120.0 <= descriptors.molecular_weight <= 750.0
+    logp_ok = descriptors.logp >= -2.0
+
+    reasons_out = []
+    if not has_basic_n:
+        reasons_out.append("no basic nitrogen (MRGPRX2 agonists require protonatable N for Asp184/Glu164 salt-bridge)")
+    if not has_aromatic:
+        reasons_out.append("no aromatic ring (known MRGPRX2 ligands have aromatic/hydrophobic anchor)")
+    if not mw_ok:
+        reasons_out.append(f"MW {descriptors.molecular_weight:.0f} Da outside 120–750 Da training range")
+    if not logp_ok:
+        reasons_out.append(f"LogP {descriptors.logp:.1f} below −2.0 (too hydrophilic for cationic amphiphilic chemotype)")
+
+    in_domain = len(reasons_out) == 0
+    if in_domain:
+        reason = "Compound matches the cationic amphiphilic chemotype of the MRGPRX2 training set."
+    else:
+        reason = (
+            "Prediction outside applicability domain — "
+            + "; ".join(reasons_out)
+            + ". Results should be interpreted with low confidence."
+        )
+    return ApplicabilityDomain(in_domain=in_domain, reason=reason)
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
@@ -325,21 +375,24 @@ def _specificity_scale(concentration: float | None) -> tuple[float, str | None]:
 
 def _experimental_adjustment_components(
     payload: PredictRequest,
-) -> tuple[list[tuple[str, float]], str | None]:
-    """Bounded, additive nudges (description, +percentage points) derived
-    from experimental evidence (AutoDock docking score, MRGPRX2 mRNA/protein
-    expression fold-change, with assay conditions attached as context), plus
-    an optional caveat note about how those conditions affected the read.
+) -> list[tuple[str, float]]:
+    """Probability-adjustment components from docking evidence only.
 
-    These describe how *strongly the compound engages MRGPRX2 at all* - they
-    don't carry directional agonist-vs-antagonist information on their own
-    (a strong docking pose, a large expression swing, or a confirmed pocket
-    contact is consistent with either an activator or a blocker), so they're
-    applied as reinforcement of whichever non-nonbinder class the
-    structure-based prior already favours (see `_apply_experimental_evidence`).
+    TWO distinct docking signals are used:
+
+    1. Absolute active-state affinity (kcal/mol) → binder/nonbinder signal.
+       A strong active-state score means the compound CAN physically occupy
+       the pocket; it moves probability mass from nonbinder toward whichever
+       direction the structure model already prefers.  Expression data is
+       NOT included here (see _receptor_regulation_note for that).
+
+    2. ΔΔScore = affinity_active − affinity_inactive → direction signal.
+       If the compound prefers the active (Gq-coupled) conformation of
+       MRGPRX2 (ΔΔScore < −1.0 kcal/mol), we nudge agonist probability up
+       and antagonist down.  The reverse (ΔΔScore > +1.0) nudges the other
+       way.  Values between ±1.0 are treated as directionally ambiguous.
     """
     components: list[tuple[str, float]] = []
-    specificity_note: str | None = None
 
     binding_site_component = _binding_site_adjustment(payload)
     if binding_site_component is not None:
@@ -347,46 +400,80 @@ def _experimental_adjustment_components(
 
     data = payload.experimental_data
     if data is None:
-        return components, specificity_note
+        return components
 
+    # 1. Absolute affinity → binder confidence (direction-neutral)
     if data.docking_score is not None:
-        magnitude = _docking_adjustment_pct(data.docking_score)
+        magnitude = _docking_affinity_pct(data.docking_score)
         if magnitude > 0:
-            components.append((f"AutoDock affinity ({data.docking_score:.1f} kcal/mol)", magnitude))
+            components.append(
+                (f"Vina active-state affinity ({data.docking_score:.1f} kcal/mol)", magnitude)
+            )
 
-    # Concentration, cell line, and duration describe the cell-based assay
-    # that produced the expression readouts below - they don't apply to the
-    # docking score above, which is a purely computational result.
-    scale, note = _specificity_scale(data.concentration)
-
-    if data.mrna_fold_change is not None:
-        magnitude = round(_expression_adjustment_pct(data.mrna_fold_change) * scale, 1)
-        if magnitude > 0:
-            context = _assay_context_suffix(data.mrna_method, data.cell_line, data.concentration, data.time_hours)
-            components.append((f"MRGPRX2 mRNA fold-change ({data.mrna_fold_change:.1f}x{context})", magnitude))
-            specificity_note = note
-
-    if data.protein_fold_change is not None:
-        magnitude = round(_expression_adjustment_pct(data.protein_fold_change) * scale, 1)
-        if magnitude > 0:
-            context = _assay_context_suffix(data.protein_method, data.cell_line, data.concentration, data.time_hours)
-            components.append((f"MRGPRX2 protein fold-change ({data.protein_fold_change:.1f}x{context})", magnitude))
-            specificity_note = note
-
-    return components, specificity_note
+    return components
 
 
-def _docking_adjustment_pct(docking_score: float) -> float:
-    """Continuous, proportional read of AutoDock affinity, in place of a
-    tiered scale - a tiered cutoff (e.g. "-7.0 = Moderate") creates an
-    artificial cliff where -6.99 and -7.01 land in different buckets despite
-    being practically identical. Instead this ramps linearly: scores weaker
-    than -5.0 kcal/mol carry no meaningful MRGPRX2-engagement signal (0pp),
-    the adjustment grows proportionally from there, and caps at +8.0pp
-    around -10.0 kcal/mol and beyond (very strong affinity)."""
+def _docking_affinity_pct(docking_score: float) -> float:
+    """Convert active-state absolute affinity to a binder-confidence boost.
+
+    Scores weaker than −5.0 kcal/mol carry no meaningful pocket-engagement
+    signal; the boost ramps linearly beyond that and caps at +8 pp near
+    −10 kcal/mol.  This moves mass from 'nonbinder' only — it does NOT shift
+    the agonist/antagonist split (ΔΔScore does that separately).
+    """
     if docking_score >= -5.0:
         return 0.0
     return round(_clamp((-docking_score - 5.0) * 1.6, 0.0, 8.0), 1)
+
+
+def _delta_delta_direction_shift(
+    probabilities: PredictionProbabilities,
+    delta_delta: float,
+) -> PredictionProbabilities:
+    """Apply ΔΔScore-based direction shift to the probability triplet.
+
+    ΔΔScore = affinity_active − affinity_inactive (kcal/mol).
+    A more negative ΔΔScore means the compound docks better into the
+    active (Gq-coupled) conformation → agonist signal.
+    A more positive ΔΔScore means inactive-state preference → antagonist
+    or nonbinder signal.
+
+    Shift magnitude is proportional to |ΔΔScore| beyond a ±1.0 dead-zone,
+    capped at 12 pp to avoid overriding the structural ML call.
+    """
+    dead_zone = 1.0          # kcal/mol — noise floor
+    max_shift = 0.12         # 12 pp in probability space
+
+    if abs(delta_delta) <= dead_zone:
+        return probabilities
+
+    shift = _clamp(
+        (abs(delta_delta) - dead_zone) * 0.04,  # 4 pp per kcal/mol beyond dead-zone
+        0.0, max_shift,
+    )
+
+    raw = {
+        "agonist": probabilities.agonist,
+        "antagonist": probabilities.antagonist,
+        "nonbinder": probabilities.nonbinder,
+    }
+
+    if delta_delta < -dead_zone:
+        # Active-state preference → boost agonist, reduce antagonist
+        transfer = min(shift, raw["antagonist"])
+        raw["agonist"] += transfer
+        raw["antagonist"] -= transfer
+    else:
+        # Inactive-state preference → boost antagonist, reduce agonist
+        transfer = min(shift, raw["agonist"])
+        raw["antagonist"] += transfer
+        raw["agonist"] -= transfer
+
+    return PredictionProbabilities(
+        agonist=round(raw["agonist"], 4),
+        antagonist=round(raw["antagonist"], 4),
+        nonbinder=round(raw["nonbinder"], 4),
+    )
 
 
 def _expression_adjustment_pct(fold_change: float) -> float:
@@ -400,47 +487,132 @@ def _expression_adjustment_pct(fold_change: float) -> float:
     return round(_clamp((fold_change - 1.0) * 1.5, 0.0, 5.0), 1)
 
 
+def _receptor_regulation_note(payload: PredictRequest) -> "ReceptorRegulation | None":
+    """Generate a separate receptor-regulation summary from expression data.
+
+    Expression fold-change reports receptor-level transcriptional/translational
+    regulation — orthogonal to efficacy direction (agonist vs antagonist).
+    A classic agonist can downregulate its own receptor via desensitisation
+    (negative fold-change), while an antagonist can leave expression unchanged.
+    These notes are surfaced as a separate output, not as input to the
+    direction classifier.
+    """
+    data = payload.experimental_data
+    if data is None:
+        return None
+
+    mrna_note = None
+    protein_note = None
+
+    if data.mrna_fold_change is not None:
+        direction = "upregulated" if data.mrna_fold_change >= 1.0 else "downregulated"
+        mrna_note = (
+            f"MRGPRX2 mRNA {direction} {data.mrna_fold_change:+.2f}× vs control"
+            + (f" ({data.mrna_method})" if data.mrna_method else "")
+            + "."
+        )
+    if data.protein_fold_change is not None:
+        direction = "upregulated" if data.protein_fold_change >= 1.0 else "downregulated"
+        protein_note = (
+            f"MRGPRX2 protein {direction} {data.protein_fold_change:+.2f}× vs control"
+            + (f" ({data.protein_method})" if data.protein_method else "")
+            + "."
+        )
+
+    if mrna_note is None and protein_note is None:
+        return None
+
+    return ReceptorRegulation(
+        mrna_note=mrna_note,
+        protein_note=protein_note,
+        warning=(
+            "Expression fold-change reflects receptor transcriptional/translational "
+            "regulation, which is mechanistically orthogonal to efficacy direction. "
+            "An agonist can downregulate MRGPRX2 via desensitisation; an antagonist "
+            "may leave expression unchanged. These values are NOT used in the "
+            "agonist/antagonist classification — they are reported separately as "
+            "receptor-regulation context."
+        ),
+    )
+
+
 def _apply_experimental_evidence(
     probabilities: PredictionProbabilities, payload: PredictRequest
 ) -> tuple[PredictionProbabilities, dict | None]:
-    """Calibrates the structure-based probabilities with experimental
-    evidence, within a bounded range, and returns a transparent breakdown of
-    what moved and by how much (or `None` when there's nothing to apply).
+    """Calibrates structure-based probabilities with two distinct docking signals.
 
-    Docking/expression data says "this compound engages MRGPRX2" - it doesn't
-    say *how* (an antagonist binds just as tightly as an agonist), so the
-    adjustment reinforces whichever of agonist/antagonist the structure-based
-    model already leans toward, borrowing probability mass from "nonbinder".
-    The agonist-vs-antagonist call itself stays purely structure-grounded.
+    Step 1 — Binder confidence (direction-neutral):
+      Active-state affinity (kcal/mol) moves mass from nonbinder toward
+      whichever class the ML model already prefers.  ΔΔScore is NOT used here.
+
+    Step 2 — Directional shift (ΔΔScore):
+      ΔΔScore = affinity_active − affinity_inactive.  If the compound docks
+      significantly better into the active (Gq-coupled) conformation (ΔΔ < −1.0),
+      probability mass shifts from antagonist → agonist.  If it prefers the
+      inactive conformation (ΔΔ > +1.0), mass shifts agonist → antagonist.
+      Values inside ±1.0 kcal/mol are treated as directionally ambiguous.
+
+    The two steps are independent: Step 1 can increase binder confidence
+    without affecting direction, and Step 2 can redirect without changing
+    total binder confidence.
     """
-    components, specificity_note = _experimental_adjustment_components(payload)
-    if not components:
+    components = _experimental_adjustment_components(payload)
+    data = payload.experimental_data
+    dds = data.delta_delta_score if data is not None else None
+
+    has_affinity_signal = bool(components)
+    has_direction_signal = dds is not None and abs(dds) > 1.0
+
+    if not has_affinity_signal and not has_direction_signal:
         return probabilities, None
 
+    # --- Step 1: binder-confidence boost (borrows from nonbinder) ---
     target_label = "antagonist" if probabilities.antagonist >= probabilities.agonist else "agonist"
-    raw = {"agonist": probabilities.agonist, "antagonist": probabilities.antagonist, "nonbinder": probabilities.nonbinder}
+    raw = {
+        "agonist": probabilities.agonist,
+        "antagonist": probabilities.antagonist,
+        "nonbinder": probabilities.nonbinder,
+    }
 
-    requested_delta_pct = min(MAX_EXPERIMENTAL_ADJUSTMENT_PCT, sum(delta for _, delta in components))
-    requested_delta = requested_delta_pct / 100.0
-    # Can't take more probability mass from "nonbinder" than it actually has.
-    applied_delta = min(requested_delta, raw["nonbinder"])
+    affinity_delta_pct = 0.0
+    if has_affinity_signal:
+        requested_delta_pct = min(MAX_EXPERIMENTAL_ADJUSTMENT_PCT, sum(d for _, d in components))
+        requested_delta = requested_delta_pct / 100.0
+        affinity_delta = min(requested_delta, raw["nonbinder"])
+        raw[target_label] += affinity_delta
+        raw["nonbinder"] -= affinity_delta
+        affinity_delta_pct = round(affinity_delta * 100, 1)
 
-    raw[target_label] += applied_delta
-    raw["nonbinder"] -= applied_delta
-
-    adjusted = PredictionProbabilities(
+    mid = PredictionProbabilities(
         agonist=round(raw["agonist"], 4),
         antagonist=round(raw["antagonist"], 4),
         nonbinder=round(raw["nonbinder"], 4),
     )
 
+    # --- Step 2: ΔΔScore directional shift (between agonist ↔ antagonist) ---
+    adjusted = mid
+    direction_components: list[dict] = []
+    if has_direction_signal and dds is not None:
+        adjusted = _delta_delta_direction_shift(mid, dds)
+        dead_zone = 1.0
+        direction_shift_pp = round(
+            _clamp((abs(dds) - dead_zone) * 0.04, 0.0, 0.12) * 100, 1
+        )
+        if dds < -dead_zone:
+            interp = f"active-state preference → agonist-consistent (ΔΔScore {dds:+.2f} kcal/mol)"
+        else:
+            interp = f"inactive-state preference → antagonist-consistent (ΔΔScore {dds:+.2f} kcal/mol)"
+        direction_components.append({"description": interp, "delta_pct": direction_shift_pp})
+
+    all_components = [{"description": d, "delta_pct": v} for d, v in components] + direction_components
+
     breakdown = {
         "target_label": target_label,
         "structure_probability": round(getattr(probabilities, target_label) * 100, 1),
         "adjusted_probability": round(getattr(adjusted, target_label) * 100, 1),
-        "applied_delta_pct": round(applied_delta * 100, 1),
-        "components": [{"description": description, "delta_pct": delta} for description, delta in components],
-        "specificity_note": specificity_note,
+        "applied_delta_pct": affinity_delta_pct,
+        "components": all_components,
+        "specificity_note": None,
     }
     return adjusted, breakdown
 
@@ -754,6 +926,9 @@ def predict_activity(payload: PredictRequest) -> PredictResponse:
             mrgprx1_comparison=mrgprx1_comparison,
             drug_likeness=_drug_likeness(descriptors),
             analyzed_at=datetime.now(UTC).isoformat(),
+            applicability_domain=_applicability_domain(molecule, descriptors),
+            assay_basis=AssayBasis(**_ASSAY_BASIS),
+            receptor_regulation=_receptor_regulation_note(payload),
         )
 
     structure_probabilities = _structure_probabilities(evidence)
@@ -835,4 +1010,7 @@ def predict_activity(payload: PredictRequest) -> PredictResponse:
         model_evidence=model_evidence,
         drug_likeness=_drug_likeness(descriptors),
         analyzed_at=datetime.now(UTC).isoformat(),
+        applicability_domain=_applicability_domain(molecule, descriptors),
+        assay_basis=AssayBasis(**_ASSAY_BASIS),
+        receptor_regulation=_receptor_regulation_note(payload),
     )
