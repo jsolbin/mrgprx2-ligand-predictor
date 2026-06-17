@@ -230,13 +230,18 @@ def classify(smiles: str, reference_compounds: list[dict]) -> dict | None:
         "nearest_neighbors": nearest_neighbors,
         "top_features": top_features,
         "summary": (
-            f"Trained on {len(compounds)} labeled MRGPRX2 compounds "
+            f"Random Forest trained on {len(compounds)} MRGPRX2 compounds "
             f"({agonist_count} agonist, {antagonist_count} antagonist, "
             f"{nonbinder_count} nonbinder"
-            + (f", {user_count} from your own labels" if user_count else "")
-            + ") using Morgan-fingerprint and physicochemical features across "
-            "all three classes. This call is the model's learned probability "
-            "for the structure - grounded in the nearest labeled neighbours "
-            "and feature importances shown below, not a hand-written rule."
+            + (f", including {user_count} from your own labels" if user_count else "")
+            + "). Training labels are derived from ChEMBL mast-cell degranulation "
+            "assays (β-hexosaminidase release, Compound 48/80 competition model), "
+            "supplemented with Ca²⁺ flux and β-arrestin recruitment readouts where "
+            "available. Features: Morgan fingerprints (radius=2, 512 bits) + "
+            "10 physicochemical descriptors (MW, LogP, TPSA, HBD, HBA, RotBonds, "
+            "RingCount, AromaticRings, FractionCSP3, Charge). "
+            "Directional signal (agonist vs antagonist) is further calibrated by "
+            "ΔΔScore from dual-state AutoDock Vina (active: PDB 7VDH; "
+            "inactive: AlphaFold2 Q96LB1)."
         ),
     }

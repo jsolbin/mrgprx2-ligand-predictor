@@ -376,17 +376,21 @@ def _specificity_scale(concentration: float | None) -> tuple[float, str | None]:
 def _experimental_adjustment_components(
     payload: PredictRequest,
 ) -> list[tuple[str, float]]:
-    """Return components that adjust binder/nonbinder probability from the
-    docking score ONLY.
+    """Probability-adjustment components from docking evidence only.
 
-    Expression fold-change is mechanistically orthogonal to efficacy direction
-    (an agonist can downregulate MRGPRX2 via desensitisation; an antagonist
-    need not change expression at all). Expression data is reported as a
-    separate receptor-regulation output, NOT used here to adjust direction
-    probabilities. Docking score is retained because it reflects binding
-    affinity — a genuine binder signal — but does NOT carry agonist-vs-
-    antagonist directional information; it only moves probability mass from
-    nonbinder toward whichever class the structure model already prefers.
+    TWO distinct docking signals are used:
+
+    1. Absolute active-state affinity (kcal/mol) → binder/nonbinder signal.
+       A strong active-state score means the compound CAN physically occupy
+       the pocket; it moves probability mass from nonbinder toward whichever
+       direction the structure model already prefers.  Expression data is
+       NOT included here (see _receptor_regulation_note for that).
+
+    2. ΔΔScore = affinity_active − affinity_inactive → direction signal.
+       If the compound prefers the active (Gq-coupled) conformation of
+       MRGPRX2 (ΔΔScore < −1.0 kcal/mol), we nudge agonist probability up
+       and antagonist down.  The reverse (ΔΔScore > +1.0) nudges the other
+       way.  Values between ±1.0 are treated as directionally ambiguous.
     """
     components: list[tuple[str, float]] = []
 
@@ -398,25 +402,78 @@ def _experimental_adjustment_components(
     if data is None:
         return components
 
+    # 1. Absolute affinity → binder confidence (direction-neutral)
     if data.docking_score is not None:
-        magnitude = _docking_adjustment_pct(data.docking_score)
+        magnitude = _docking_affinity_pct(data.docking_score)
         if magnitude > 0:
-            components.append((f"AutoDock Vina affinity ({data.docking_score:.1f} kcal/mol)", magnitude))
+            components.append(
+                (f"Vina active-state affinity ({data.docking_score:.1f} kcal/mol)", magnitude)
+            )
 
     return components
 
 
-def _docking_adjustment_pct(docking_score: float) -> float:
-    """Continuous, proportional read of AutoDock affinity, in place of a
-    tiered scale - a tiered cutoff (e.g. "-7.0 = Moderate") creates an
-    artificial cliff where -6.99 and -7.01 land in different buckets despite
-    being practically identical. Instead this ramps linearly: scores weaker
-    than -5.0 kcal/mol carry no meaningful MRGPRX2-engagement signal (0pp),
-    the adjustment grows proportionally from there, and caps at +8.0pp
-    around -10.0 kcal/mol and beyond (very strong affinity)."""
+def _docking_affinity_pct(docking_score: float) -> float:
+    """Convert active-state absolute affinity to a binder-confidence boost.
+
+    Scores weaker than −5.0 kcal/mol carry no meaningful pocket-engagement
+    signal; the boost ramps linearly beyond that and caps at +8 pp near
+    −10 kcal/mol.  This moves mass from 'nonbinder' only — it does NOT shift
+    the agonist/antagonist split (ΔΔScore does that separately).
+    """
     if docking_score >= -5.0:
         return 0.0
     return round(_clamp((-docking_score - 5.0) * 1.6, 0.0, 8.0), 1)
+
+
+def _delta_delta_direction_shift(
+    probabilities: PredictionProbabilities,
+    delta_delta: float,
+) -> PredictionProbabilities:
+    """Apply ΔΔScore-based direction shift to the probability triplet.
+
+    ΔΔScore = affinity_active − affinity_inactive (kcal/mol).
+    A more negative ΔΔScore means the compound docks better into the
+    active (Gq-coupled) conformation → agonist signal.
+    A more positive ΔΔScore means inactive-state preference → antagonist
+    or nonbinder signal.
+
+    Shift magnitude is proportional to |ΔΔScore| beyond a ±1.0 dead-zone,
+    capped at 12 pp to avoid overriding the structural ML call.
+    """
+    dead_zone = 1.0          # kcal/mol — noise floor
+    max_shift = 0.12         # 12 pp in probability space
+
+    if abs(delta_delta) <= dead_zone:
+        return probabilities
+
+    shift = _clamp(
+        (abs(delta_delta) - dead_zone) * 0.04,  # 4 pp per kcal/mol beyond dead-zone
+        0.0, max_shift,
+    )
+
+    raw = {
+        "agonist": probabilities.agonist,
+        "antagonist": probabilities.antagonist,
+        "nonbinder": probabilities.nonbinder,
+    }
+
+    if delta_delta < -dead_zone:
+        # Active-state preference → boost agonist, reduce antagonist
+        transfer = min(shift, raw["antagonist"])
+        raw["agonist"] += transfer
+        raw["antagonist"] -= transfer
+    else:
+        # Inactive-state preference → boost antagonist, reduce agonist
+        transfer = min(shift, raw["agonist"])
+        raw["antagonist"] += transfer
+        raw["agonist"] -= transfer
+
+    return PredictionProbabilities(
+        agonist=round(raw["agonist"], 4),
+        antagonist=round(raw["antagonist"], 4),
+        nonbinder=round(raw["nonbinder"], 4),
+    )
 
 
 def _expression_adjustment_pct(fold_change: float) -> float:
@@ -482,43 +539,79 @@ def _receptor_regulation_note(payload: PredictRequest) -> "ReceptorRegulation | 
 def _apply_experimental_evidence(
     probabilities: PredictionProbabilities, payload: PredictRequest
 ) -> tuple[PredictionProbabilities, dict | None]:
-    """Calibrates the structure-based probabilities with experimental
-    evidence, within a bounded range, and returns a transparent breakdown of
-    what moved and by how much (or `None` when there's nothing to apply).
+    """Calibrates structure-based probabilities with two distinct docking signals.
 
-    Docking/expression data says "this compound engages MRGPRX2" - it doesn't
-    say *how* (an antagonist binds just as tightly as an agonist), so the
-    adjustment reinforces whichever of agonist/antagonist the structure-based
-    model already leans toward, borrowing probability mass from "nonbinder".
-    The agonist-vs-antagonist call itself stays purely structure-grounded.
+    Step 1 — Binder confidence (direction-neutral):
+      Active-state affinity (kcal/mol) moves mass from nonbinder toward
+      whichever class the ML model already prefers.  ΔΔScore is NOT used here.
+
+    Step 2 — Directional shift (ΔΔScore):
+      ΔΔScore = affinity_active − affinity_inactive.  If the compound docks
+      significantly better into the active (Gq-coupled) conformation (ΔΔ < −1.0),
+      probability mass shifts from antagonist → agonist.  If it prefers the
+      inactive conformation (ΔΔ > +1.0), mass shifts agonist → antagonist.
+      Values inside ±1.0 kcal/mol are treated as directionally ambiguous.
+
+    The two steps are independent: Step 1 can increase binder confidence
+    without affecting direction, and Step 2 can redirect without changing
+    total binder confidence.
     """
     components = _experimental_adjustment_components(payload)
-    if not components:
+    data = payload.experimental_data
+    dds = data.delta_delta_score if data is not None else None
+
+    has_affinity_signal = bool(components)
+    has_direction_signal = dds is not None and abs(dds) > 1.0
+
+    if not has_affinity_signal and not has_direction_signal:
         return probabilities, None
 
+    # --- Step 1: binder-confidence boost (borrows from nonbinder) ---
     target_label = "antagonist" if probabilities.antagonist >= probabilities.agonist else "agonist"
-    raw = {"agonist": probabilities.agonist, "antagonist": probabilities.antagonist, "nonbinder": probabilities.nonbinder}
+    raw = {
+        "agonist": probabilities.agonist,
+        "antagonist": probabilities.antagonist,
+        "nonbinder": probabilities.nonbinder,
+    }
 
-    requested_delta_pct = min(MAX_EXPERIMENTAL_ADJUSTMENT_PCT, sum(delta for _, delta in components))
-    requested_delta = requested_delta_pct / 100.0
-    # Can't take more probability mass from "nonbinder" than it actually has.
-    applied_delta = min(requested_delta, raw["nonbinder"])
+    affinity_delta_pct = 0.0
+    if has_affinity_signal:
+        requested_delta_pct = min(MAX_EXPERIMENTAL_ADJUSTMENT_PCT, sum(d for _, d in components))
+        requested_delta = requested_delta_pct / 100.0
+        affinity_delta = min(requested_delta, raw["nonbinder"])
+        raw[target_label] += affinity_delta
+        raw["nonbinder"] -= affinity_delta
+        affinity_delta_pct = round(affinity_delta * 100, 1)
 
-    raw[target_label] += applied_delta
-    raw["nonbinder"] -= applied_delta
-
-    adjusted = PredictionProbabilities(
+    mid = PredictionProbabilities(
         agonist=round(raw["agonist"], 4),
         antagonist=round(raw["antagonist"], 4),
         nonbinder=round(raw["nonbinder"], 4),
     )
 
+    # --- Step 2: ΔΔScore directional shift (between agonist ↔ antagonist) ---
+    adjusted = mid
+    direction_components: list[dict] = []
+    if has_direction_signal and dds is not None:
+        adjusted = _delta_delta_direction_shift(mid, dds)
+        dead_zone = 1.0
+        direction_shift_pp = round(
+            _clamp((abs(dds) - dead_zone) * 0.04, 0.0, 0.12) * 100, 1
+        )
+        if dds < -dead_zone:
+            interp = f"active-state preference → agonist-consistent (ΔΔScore {dds:+.2f} kcal/mol)"
+        else:
+            interp = f"inactive-state preference → antagonist-consistent (ΔΔScore {dds:+.2f} kcal/mol)"
+        direction_components.append({"description": interp, "delta_pct": direction_shift_pp})
+
+    all_components = [{"description": d, "delta_pct": v} for d, v in components] + direction_components
+
     breakdown = {
         "target_label": target_label,
         "structure_probability": round(getattr(probabilities, target_label) * 100, 1),
         "adjusted_probability": round(getattr(adjusted, target_label) * 100, 1),
-        "applied_delta_pct": round(applied_delta * 100, 1),
-        "components": [{"description": description, "delta_pct": delta} for description, delta in components],
+        "applied_delta_pct": affinity_delta_pct,
+        "components": all_components,
         "specificity_note": None,
     }
     return adjusted, breakdown

@@ -223,7 +223,12 @@ export function SearchWorkspace() {
       ]
     : [];
 
-  async function onPredict(overrideQuery?: string, overrideDockingScore?: number | null) {
+  async function onPredict(
+    overrideQuery?: string,
+    overrideDockingScore?: number | null,
+    overrideDeltaDeltaScore?: number | null,
+    overrideInactiveDockingScore?: number | null,
+  ) {
     const targetQuery = (overrideQuery ?? query).trim();
     if (!targetQuery) {
       return;
@@ -231,6 +236,11 @@ export function SearchWorkspace() {
 
     if (overrideQuery !== undefined) {
       setQuery(overrideQuery);
+      // Switching to a different compound — clear the previous docking cache
+      // so stale scores from the old structure don't carry over.
+      setDockingResult(null);
+      setDockingError(null);
+      updateExperimentalData("dockingScore", "");
     }
 
     setLoadingPredict(true);
@@ -249,6 +259,12 @@ export function SearchWorkspace() {
             docking_score: overrideDockingScore !== undefined
               ? overrideDockingScore
               : parseNullableNumber(experimentalData.dockingScore),
+            delta_delta_score: overrideDeltaDeltaScore !== undefined
+              ? overrideDeltaDeltaScore
+              : null,
+            inactive_docking_score: overrideInactiveDockingScore !== undefined
+              ? overrideInactiveDockingScore
+              : null,
             mrna_fold_change: parseNullableNumber(
               experimentalData.mrnaFoldChange,
             ),
@@ -377,6 +393,8 @@ export function SearchWorkspace() {
     setExperimentalData(INITIAL_EXPERIMENTAL_DATA);
     setBindingMode("Unknown");
     setSelectedResidues([]);
+    setDockingResult(null);
+    setDockingError(null);
   }
 
   return (
@@ -406,6 +424,9 @@ export function SearchWorkspace() {
               setPrediction(null);
               setStructureImageUrl(null);
               setError(null);
+              setDockingResult(null);
+              setDockingError(null);
+              updateExperimentalData("dockingScore", "");
             }}
             placeholder="Paste a SMILES string here. e.g. C1CC1N2C=C(C(=O)C3=CC(=C(C=C32)N4CCNCC4)F)C(=O)O"
           />
@@ -555,10 +576,15 @@ export function SearchWorkspace() {
                           "dockingScore",
                           String(result.affinity_kcal_mol)
                         );
-                        // Auto-predict with the fresh docking score (state hasn't
-                        // flushed yet, so pass the score directly as an override)
+                        // Auto-predict with fresh docking scores (state hasn't
+                        // flushed yet, so pass all values directly as overrides)
                         if (query.trim()) {
-                          onPredict(undefined, result.affinity_kcal_mol);
+                          onPredict(
+                            undefined,
+                            result.affinity_kcal_mol,
+                            result.delta_delta_score,
+                            result.inactive_affinity_kcal_mol,
+                          );
                         }
                       } catch (e) {
                         setDockingError(
@@ -587,20 +613,56 @@ export function SearchWorkspace() {
                     </p>
                   )}
                   {dockingResult && !dockingLoading && (
-                    <div className="rounded-lg bg-[#f0fdf4] border border-[#86efac] px-3 py-2 text-[13px] text-[#166534]">
-                      Best affinity: <span className="font-semibold">{dockingResult.affinity_kcal_mol.toFixed(2)} kcal/mol</span>
-                      {" "}({dockingResult.num_modes} pose{dockingResult.num_modes !== 1 ? "s" : ""}) —
-                      score filled &amp; prediction updated
+                    <div className="rounded-lg bg-[#f0fdf4] border border-[#86efac] px-3 py-2 text-[13px] text-[#166534] space-y-1">
+                      <div>
+                        <span className="font-semibold">Active state (7VDH):</span>{" "}
+                        {dockingResult.affinity_kcal_mol.toFixed(2)} kcal/mol
+                        {" "}({dockingResult.num_modes} pose{dockingResult.num_modes !== 1 ? "s" : ""})
+                      </div>
+                      {dockingResult.inactive_affinity_kcal_mol != null && (
+                        <div>
+                          <span className="font-semibold">Inactive state (AlphaFold2):</span>{" "}
+                          {dockingResult.inactive_affinity_kcal_mol.toFixed(2)} kcal/mol
+                        </div>
+                      )}
+                      {dockingResult.delta_delta_score != null && (
+                        <div>
+                          <span className="font-semibold">ΔΔScore:</span>{" "}
+                          {dockingResult.delta_delta_score > 0 ? "+" : ""}
+                          {dockingResult.delta_delta_score.toFixed(2)} kcal/mol
+                          {" — "}
+                          {dockingResult.delta_delta_score < -1.0
+                            ? "active-state preference → agonist signal"
+                            : dockingResult.delta_delta_score > 1.0
+                            ? "inactive-state preference → antagonist signal"
+                            : "state-indifferent (no directional signal)"}
+                        </div>
+                      )}
+                      <div className="text-[#4ade80] font-medium">Prediction updated automatically.</div>
                     </div>
                   )}
                   {dockingError && (
-                    <div className="rounded-lg bg-[#fef2f2] border border-[#fca5a5] px-3 py-2 text-[13px] text-[#991b1b]">
-                      {dockingError}
+                    <div className={`rounded-lg px-3 py-2 text-[13px] space-y-1 ${
+                      dockingError.includes("manually")
+                        ? "bg-[#fffbeb] border border-[#fcd34d] text-[#92400e]"
+                        : "bg-[#fef2f2] border border-[#fca5a5] text-[#991b1b]"
+                    }`}>
+                      {dockingError.includes("manually") ? (
+                        <>
+                          <div className="font-medium">AutoDock Vina could not prepare this molecule for 3D docking.</div>
+                          <div className="text-[12px]">
+                            This SMILES uses aromatic lactone/chromone notation that RDKit cannot embed into 3D coordinates.
+                            Please enter the docking score manually in the field below (from an external docking tool), or leave it blank to use the structure-only prediction.
+                          </div>
+                        </>
+                      ) : (
+                        dockingError
+                      )}
                     </div>
                   )}
                 </div>
                 <Field
-                  label="Docking Score (kcal/mol)"
+                  label={dockingError?.includes("manually") ? "Docking Score (kcal/mol) — enter manually" : "Docking Score (kcal/mol)"}
                   value={experimentalData.dockingScore}
                   onChange={(value) =>
                     updateExperimentalData("dockingScore", value)
@@ -609,8 +671,16 @@ export function SearchWorkspace() {
                 />
               </FormCard>
 
-              <SectionLabel icon={<SparkGlyph />}>mRNA Expression</SectionLabel>
-              <FormCard>
+              <div className="flex items-center gap-2">
+                <SectionLabel icon={<SparkGlyph />}>mRNA Expression</SectionLabel>
+                <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-300">
+                  Reference Only
+                </span>
+              </div>
+              <FormCard className="border-amber-200 bg-amber-50/40">
+                <p className="text-[11px] text-amber-700 mb-2">
+                  Not used in the agonist/antagonist classifier. Displayed separately as receptor regulation data.
+                </p>
                 <Field
                   label="Fold Change (vs control)"
                   value={experimentalData.mrnaFoldChange}
@@ -629,10 +699,16 @@ export function SearchWorkspace() {
                 />
               </FormCard>
 
-              <SectionLabel icon={<TubeGlyph />}>
-                Protein Expression
-              </SectionLabel>
-              <FormCard>
+              <div className="flex items-center gap-2">
+                <SectionLabel icon={<TubeGlyph />}>Protein Expression</SectionLabel>
+                <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-300">
+                  Reference Only
+                </span>
+              </div>
+              <FormCard className="border-amber-200 bg-amber-50/40">
+                <p className="text-[11px] text-amber-700 mb-2">
+                  Not used in the agonist/antagonist classifier. Displayed separately as receptor regulation data.
+                </p>
                 <Field
                   label="Fold Change (vs control)"
                   value={experimentalData.proteinFoldChange}
@@ -1495,9 +1571,9 @@ function PanelCard({ children }: { children: ReactNode }) {
   );
 }
 
-function FormCard({ children }: { children: ReactNode }) {
+function FormCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className="rounded-[22px] border border-[#e5e8f1] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)]">
+    <div className={`rounded-[22px] border border-[#e5e8f1] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(17,24,39,0.02)] ${className ?? ""}`}>
       <div className="grid gap-3">{children}</div>
     </div>
   );
