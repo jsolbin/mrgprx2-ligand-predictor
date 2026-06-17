@@ -11,3 +11,9 @@ frontend/.next/
 backend/.pytest_cache/
 backend/data/app.db
 backend/data/*.sqlite3
+
+# Intermediate receptor prep files (only mrgprx2_receptor.pdbqt is committed)
+backend/data/receptor/7VDH.pdb
+backend/data/receptor/7VDH_receptor_H.pdb
+backend/data/receptor/7VDH_receptor_noH.pdb
+backend/data/receptor/7VDH_receptor_raw.pdb

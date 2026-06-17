@@ -4,12 +4,14 @@ import type { ChangeEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { ProbabilityChart } from "@/components/probability-chart";
 import {
+  dockCompound,
   getCompoundRenderUrl,
   labelCompound,
   parseStructureFile,
   predictCompound,
   searchCompound,
 } from "@/lib/api";
+import type { DockingResponse } from "@/lib/api";
 import type {
   CompoundSearchResponse,
   LabelSubmissionResponse,
@@ -141,6 +143,9 @@ export function SearchWorkspace() {
     string | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [dockingResult, setDockingResult] = useState<DockingResponse | null>(null);
+  const [dockingLoading, setDockingLoading] = useState(false);
+  const [dockingError, setDockingError] = useState<string | null>(null);
 
   const canPredict = query.trim().length > 0;
   const activeSmiles = (compound?.smiles ?? query).trim();
@@ -525,16 +530,64 @@ export function SearchWorkspace() {
             </summary>
             <div className="mt-3 grid gap-3">
               <SectionLabel icon={<FlaskGlyph />}>
-                AutoDock Results
+                AutoDock Vina
               </SectionLabel>
               <FormCard>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    disabled={!activeSmiles || dockingLoading}
+                    onClick={async () => {
+                      if (!activeSmiles) return;
+                      setDockingLoading(true);
+                      setDockingError(null);
+                      setDockingResult(null);
+                      try {
+                        const result = await dockCompound(activeSmiles);
+                        setDockingResult(result);
+                        updateExperimentalData(
+                          "dockingScore",
+                          String(result.affinity_kcal_mol)
+                        );
+                      } catch (e) {
+                        setDockingError(
+                          e instanceof Error ? e.message : "Docking failed"
+                        );
+                      } finally {
+                        setDockingLoading(false);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-[#4a84f6] bg-[#f0f5ff] px-4 py-2.5 text-[13px] font-medium text-[#2563eb] transition hover:bg-[#dbeafe] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {dockingLoading ? (
+                      <>
+                        <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[#2563eb] border-t-transparent" />
+                        Running AutoDock Vina…
+                      </>
+                    ) : (
+                      "Run AutoDock Vina (MRGPRX2 pocket)"
+                    )}
+                  </button>
+                  {dockingResult && (
+                    <div className="rounded-lg bg-[#f0fdf4] border border-[#86efac] px-3 py-2 text-[13px] text-[#166534]">
+                      Best affinity: <span className="font-semibold">{dockingResult.affinity_kcal_mol.toFixed(2)} kcal/mol</span>
+                      {" "}({dockingResult.num_modes} pose{dockingResult.num_modes !== 1 ? "s" : ""})
+                      {" — "}score auto-filled below
+                    </div>
+                  )}
+                  {dockingError && (
+                    <div className="rounded-lg bg-[#fef2f2] border border-[#fca5a5] px-3 py-2 text-[13px] text-[#991b1b]">
+                      {dockingError}
+                    </div>
+                  )}
+                </div>
                 <Field
                   label="Docking Score (kcal/mol)"
                   value={experimentalData.dockingScore}
                   onChange={(value) =>
                     updateExperimentalData("dockingScore", value)
                   }
-                  placeholder="e.g. -6.5"
+                  placeholder="e.g. -6.5 (or run Vina above)"
                 />
               </FormCard>
 
