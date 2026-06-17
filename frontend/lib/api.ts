@@ -34,8 +34,6 @@ type PredictPayload = {
   receptor: string;
   experimental_data: {
     docking_score: number | null;
-    delta_delta_score: number | null;
-    inactive_docking_score: number | null;
     mrna_fold_change: number | null;
     mrna_method: string | null;
     protein_fold_change: number | null;
@@ -93,11 +91,7 @@ export async function parseStructureFile(file: File) {
 
 export type DockingResponse = {
   affinity_kcal_mol: number;
-  inactive_affinity_kcal_mol: number | null;
-  delta_delta_score: number | null;
   num_modes: number;
-  active_receptor: string | null;
-  inactive_receptor: string | null;
   warning: string | null;
 };
 

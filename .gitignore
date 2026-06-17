@@ -7,16 +7,13 @@ __pycache__/
 
 frontend/node_modules/
 frontend/.next/
-frontend/tsconfig.tsbuildinfo
 
 backend/.pytest_cache/
 backend/data/app.db
 backend/data/*.sqlite3
 
-# Intermediate receptor prep files (committed: mrgprx2_receptor.pdbqt, mrgprx2_inactive.pdbqt)
+# Intermediate receptor prep files (only mrgprx2_receptor.pdbqt is committed)
 backend/data/receptor/7VDH.pdb
 backend/data/receptor/7VDH_receptor_H.pdb
 backend/data/receptor/7VDH_receptor_noH.pdb
 backend/data/receptor/7VDH_receptor_raw.pdb
-backend/data/receptor/AF_Q96LB1_mrgprx2_inactive.pdb
-backend/data/receptor/AF_inactive_H.pdb

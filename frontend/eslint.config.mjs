@@ -1,4 +1,4 @@
-import nextVitals from "eslint-config-next/core-web-vitals.js";
+import nextVitals from "eslint-config-next/core-web-vitals";
 import prettierConfig from "eslint-config-prettier";
 
 const config = [

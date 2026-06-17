@@ -8,11 +8,7 @@ class DockingRequest(BaseModel):
 
 class DockingResponse(BaseModel):
     affinity_kcal_mol: float
-    inactive_affinity_kcal_mol: float | None = None
-    delta_delta_score: float | None = None
     num_modes: int
-    active_receptor: str | None = None
-    inactive_receptor: str | None = None
     warning: str | None = None
 
 
@@ -30,11 +26,9 @@ class CompoundSearchResponse(BaseModel):
 
 class ExperimentalDataInput(BaseModel):
     docking_score: float | None = None
-    delta_delta_score: float | None = None          # active − inactive (ΔΔScore)
-    inactive_docking_score: float | None = None
-    mrna_fold_change: float | None = None           # reference only, not used in classifier
+    mrna_fold_change: float | None = None
     mrna_method: str | None = None
-    protein_fold_change: float | None = None        # reference only, not used in classifier
+    protein_fold_change: float | None = None
     protein_method: str | None = None
     cell_line: str | None = None
     concentration: float | None = None
@@ -188,20 +182,6 @@ class ModelEvidence(BaseModel):
     experimental_adjustment: ExperimentalAdjustment | None = None
 
 
-class ApplicabilityDomain(BaseModel):
-    in_domain: bool
-    reason: str
-
-class AssayBasis(BaseModel):
-    readout: str
-    note: str
-
-class ReceptorRegulation(BaseModel):
-    mrna_note: str | None = None
-    protein_note: str | None = None
-    warning: str
-
-
 class PredictResponse(BaseModel):
     compound_name: str
     receptor: str
@@ -223,9 +203,6 @@ class PredictResponse(BaseModel):
     drug_likeness: list[DrugLikenessCheck]
     model_evidence: ModelEvidence | None = None
     analyzed_at: str
-    applicability_domain: ApplicabilityDomain | None = None
-    assay_basis: AssayBasis | None = None
-    receptor_regulation: ReceptorRegulation | None = None
 
 
 class StructureFileParseResponse(BaseModel):
