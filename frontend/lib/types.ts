@@ -112,6 +112,19 @@ export type PredictionResponse = {
       specificity_note: string | null;
     } | null;
   } | null;
+  applicability_domain: {
+    in_domain: boolean;
+    reason: string;
+  } | null;
+  assay_basis: {
+    readout: string;
+    note: string;
+  } | null;
+  receptor_regulation: {
+    mrna_note: string | null;
+    protein_note: string | null;
+    warning: string;
+  } | null;
   analyzed_at: string;
 };
 

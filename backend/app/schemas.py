@@ -182,6 +182,20 @@ class ModelEvidence(BaseModel):
     experimental_adjustment: ExperimentalAdjustment | None = None
 
 
+class ApplicabilityDomain(BaseModel):
+    in_domain: bool
+    reason: str
+
+class AssayBasis(BaseModel):
+    readout: str
+    note: str
+
+class ReceptorRegulation(BaseModel):
+    mrna_note: str | None = None
+    protein_note: str | None = None
+    warning: str
+
+
 class PredictResponse(BaseModel):
     compound_name: str
     receptor: str
@@ -203,6 +217,9 @@ class PredictResponse(BaseModel):
     drug_likeness: list[DrugLikenessCheck]
     model_evidence: ModelEvidence | None = None
     analyzed_at: str
+    applicability_domain: ApplicabilityDomain | None = None
+    assay_basis: AssayBasis | None = None
+    receptor_regulation: ReceptorRegulation | None = None
 
 
 class StructureFileParseResponse(BaseModel):
