@@ -28,7 +28,16 @@ _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite"
 if DATABASE_URL.startswith("sqlite"):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(DATABASE_URL, connect_args=_connect_args)
+try:
+    engine = create_engine(DATABASE_URL, connect_args=_connect_args)
+except Exception as _e:  # pragma: no cover
+    import logging
+    logging.getLogger(__name__).warning(
+        "DATABASE_URL invalid (%s); falling back to SQLite at %s",
+        _e, DEFAULT_DATABASE_URL,
+    )
+    engine = create_engine(DEFAULT_DATABASE_URL, connect_args={"check_same_thread": False})
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 

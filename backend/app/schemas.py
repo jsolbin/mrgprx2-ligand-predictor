@@ -8,7 +8,11 @@ class DockingRequest(BaseModel):
 
 class DockingResponse(BaseModel):
     affinity_kcal_mol: float
+    inactive_affinity_kcal_mol: float | None = None
+    delta_delta_score: float | None = None
     num_modes: int
+    active_receptor: str | None = None
+    inactive_receptor: str | None = None
     warning: str | None = None
 
 
@@ -26,9 +30,11 @@ class CompoundSearchResponse(BaseModel):
 
 class ExperimentalDataInput(BaseModel):
     docking_score: float | None = None
-    mrna_fold_change: float | None = None
+    delta_delta_score: float | None = None          # active − inactive (ΔΔScore)
+    inactive_docking_score: float | None = None
+    mrna_fold_change: float | None = None           # reference only, not used in classifier
     mrna_method: str | None = None
-    protein_fold_change: float | None = None
+    protein_fold_change: float | None = None        # reference only, not used in classifier
     protein_method: str | None = None
     cell_line: str | None = None
     concentration: float | None = None

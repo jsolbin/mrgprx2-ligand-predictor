@@ -1,6 +1,4 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
+import nextVitals from "eslint-config-next/core-web-vitals.js";
 import prettierConfig from "eslint-config-prettier";
 
 const __filename = fileURLToPath(import.meta.url);

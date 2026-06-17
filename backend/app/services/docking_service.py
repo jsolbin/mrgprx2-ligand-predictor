@@ -1,12 +1,22 @@
-"""AutoDock Vina docking service for MRGPRX2 ligand affinity estimation.
+"""AutoDock Vina dual-state docking service for MRGPRX2.
 
-Workflow:
-  SMILES → 3D conformer (RDKit ETKDGv3) → PDBQT (Meeko)
-      → Vina subprocess (receptor: 7VDH chain R, orthosteric pocket)
-      → best affinity (kcal/mol)
+Docks the ligand against TWO receptor conformations and returns ΔΔScore:
 
-Grid box is centred on the 6IB ligand in 7VDH (compound 48/80 fragment),
-covering the MRGPRX2 orthosteric binding pocket (25 × 25 × 25 Å).
+  Active state  : PDB 7VDH chain R (Gq-coupled MRGPRX2 + C48/80 fragment,
+                  cryo-EM 2.9 Å). Grid centred on the 6IB ligand.
+  Inactive state: AlphaFold2 monomer v6 (Q96LB1), which adopts an
+                  inactive-like conformation with inward TM6 and closed
+                  G-protein interface.
+
+ΔΔScore = affinity_active − affinity_inactive  (both in kcal/mol)
+
+Interpretation:
+  ΔΔScore ≪ 0  → ligand prefers active state  → agonist-consistent
+  ΔΔScore ≈ 0  → state-indifferent binding    → cannot distinguish
+  ΔΔScore ≫ 0  → ligand prefers inactive state → antagonist-consistent
+
+The absolute docking score (active) still correlates with binding affinity
+(binder vs nonbinder), while ΔΔScore carries the directional signal.
 """
 
 from __future__ import annotations
@@ -23,13 +33,15 @@ from meeko import MoleculePreparation, PDBQTWriterLegacy
 
 _BASE = Path(__file__).resolve().parent.parent.parent
 
-RECEPTOR_PDBQT = _BASE / "data" / "receptor" / "mrgprx2_receptor.pdbqt"
+# Active state: PDB 7VDH chain R (Gq-coupled, agonist-bound)
+ACTIVE_RECEPTOR_PDBQT = _BASE / "data" / "receptor" / "mrgprx2_receptor.pdbqt"
+ACTIVE_GRID_CENTER = (99.35, 65.30, 82.77)   # centroid of 6IB ligand in 7VDH
 
-# Grid centred on compound-48/80 fragment (6IB) in PDB 7VDH chain R
-GRID_CENTER = (99.35, 65.30, 82.77)
+# Inactive state: AlphaFold2 Q96LB1 (inactive-like, TM6 inward)
+INACTIVE_RECEPTOR_PDBQT = _BASE / "data" / "receptor" / "mrgprx2_inactive.pdbqt"
+INACTIVE_GRID_CENTER = (8.08, -3.06, -4.32)  # centroid of key pocket residues
+
 GRID_SIZE = (25.0, 25.0, 25.0)
-
-# Docking accuracy: 8 is publication-quality; 4 is fast/preview
 DEFAULT_EXHAUSTIVENESS = 8
 
 
@@ -48,17 +60,40 @@ def _vina_binary() -> Path:
 
 
 def _smiles_to_pdbqt(smiles: str, tmp_dir: str) -> str:
-    """Convert SMILES to a PDBQT string via RDKit + Meeko."""
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        raise ValueError(f"Invalid SMILES: {smiles}")
-
+        # Some chemically valid SMILES (e.g. chromone/coumarin/lactone derivatives
+        # with aromatic ring notation like c(=O) in a pyranone) fail RDKit's
+        # strict sanitization.  Retry with partial sanitization that skips the
+        # final property/valence check — enough for most heterocyclic rings.
+        mol_raw = Chem.MolFromSmiles(smiles, sanitize=False)
+        if mol_raw is not None:
+            try:
+                Chem.SanitizeMol(
+                    mol_raw,
+                    Chem.SanitizeFlags.SANITIZE_ALL
+                    ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES,
+                )
+                mol = mol_raw
+            except Exception:
+                pass
+    if mol is None:
+        raise ValueError(
+            "3D structure preparation failed — RDKit cannot parse this SMILES. "
+            "The molecule likely uses non-standard aromatic lactone/chromone notation "
+            "(e.g. c(=O) inside an aromatic ring). "
+            "Please enter the docking score manually."
+        )
     mol = Chem.AddHs(mol)
     params = AllChem.ETKDGv3()
     params.randomSeed = 42
     if AllChem.EmbedMolecule(mol, params) == -1:
-        # ETKDG failed – try random coords
-        AllChem.EmbedMolecule(mol, AllChem.ETKDGv2())
+        if AllChem.EmbedMolecule(mol, AllChem.ETKDGv2()) == -1:
+            raise ValueError(
+                "3D conformation generation failed for this SMILES "
+                "(conformer embedding returned no valid poses). "
+                "Please enter the docking score manually."
+            )
     AllChem.MMFFOptimizeMolecule(mol, maxIters=2000)
 
     prep = MoleculePreparation()
@@ -73,8 +108,7 @@ def _smiles_to_pdbqt(smiles: str, tmp_dir: str) -> str:
     return ligand_path
 
 
-def _parse_vina_output(stdout: str) -> float | None:
-    """Extract best affinity (mode 1) from Vina stdout table."""
+def _parse_vina_best(stdout: str) -> float | None:
     for line in stdout.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[0] == "1":
@@ -85,84 +119,105 @@ def _parse_vina_output(stdout: str) -> float | None:
     return None
 
 
+def _run_vina(
+    receptor: Path,
+    ligand_path: str,
+    center: tuple[float, float, float],
+    size: tuple[float, float, float],
+    out_path: str,
+    exhaustiveness: int,
+    num_modes: int,
+    vina: Path,
+) -> tuple[float, int]:
+    cx, cy, cz = center
+    sx, sy, sz = size
+    cmd = [
+        str(vina),
+        "--receptor", str(receptor),
+        "--ligand", ligand_path,
+        "--center_x", str(cx), "--center_y", str(cy), "--center_z", str(cz),
+        "--size_x", str(sx), "--size_y", str(sy), "--size_z", str(sz),
+        "--exhaustiveness", str(exhaustiveness),
+        "--num_modes", str(num_modes),
+        "--out", out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Vina timed out after 120 s")
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Vina exited with code {result.returncode}:\n{result.stderr}"
+        )
+
+    affinity = _parse_vina_best(result.stdout + result.stderr)
+    if affinity is None:
+        raise RuntimeError(f"Could not parse Vina affinity:\n{result.stdout}")
+
+    poses = 0
+    if os.path.exists(out_path):
+        with open(out_path) as f:
+            poses = f.read().count("MODEL")
+    return affinity, poses
+
+
 def run_docking(
     smiles: str,
     exhaustiveness: int = DEFAULT_EXHAUSTIVENESS,
     num_modes: int = 9,
 ) -> dict:
-    """Run AutoDock Vina and return the best docking affinity.
+    """Run dual-state AutoDock Vina and return affinity + ΔΔScore.
 
     Returns:
         {
-          "affinity_kcal_mol": float,   # best pose energy (negative = better)
-          "num_modes": int,             # poses found
-          "warning": str | None,        # non-fatal issues
+          "affinity_kcal_mol": float,     # active-state best pose (kcal/mol)
+          "inactive_affinity_kcal_mol": float,
+          "delta_delta_score": float,      # active − inactive (kcal/mol)
+          "num_modes": int,
+          "active_receptor": str,
+          "inactive_receptor": str,
+          "warning": str | None,
         }
-    Raises:
-        RuntimeError on Vina failure.
-        ValueError on bad SMILES or missing receptor.
+
+    ΔΔScore < 0 → active-state preference → agonist signal
+    ΔΔScore > 0 → inactive-state preference → antagonist/nonbinder signal
     """
-    if not RECEPTOR_PDBQT.exists():
-        raise FileNotFoundError(
-            f"Receptor PDBQT not found: {RECEPTOR_PDBQT}. "
-            "Run scripts/prep_receptor.py to generate it."
-        )
+    for path, label in [
+        (ACTIVE_RECEPTOR_PDBQT, "active"),
+        (INACTIVE_RECEPTOR_PDBQT, "inactive"),
+    ]:
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Receptor PDBQT ({label}) not found: {path}"
+            )
 
     vina = _vina_binary()
-    warning = None
 
     with tempfile.TemporaryDirectory() as tmp:
         ligand_path = _smiles_to_pdbqt(smiles, tmp)
-        out_path = os.path.join(tmp, "out.pdbqt")
 
-        cx, cy, cz = GRID_CENTER
-        sx, sy, sz = GRID_SIZE
+        active_affinity, active_poses = _run_vina(
+            ACTIVE_RECEPTOR_PDBQT, ligand_path,
+            ACTIVE_GRID_CENTER, GRID_SIZE,
+            os.path.join(tmp, "out_active.pdbqt"),
+            exhaustiveness, num_modes, vina,
+        )
+        inactive_affinity, _ = _run_vina(
+            INACTIVE_RECEPTOR_PDBQT, ligand_path,
+            INACTIVE_GRID_CENTER, GRID_SIZE,
+            os.path.join(tmp, "out_inactive.pdbqt"),
+            exhaustiveness, num_modes, vina,
+        )
 
-        cmd = [
-            str(vina),
-            "--receptor", str(RECEPTOR_PDBQT),
-            "--ligand", ligand_path,
-            "--center_x", str(cx),
-            "--center_y", str(cy),
-            "--center_z", str(cz),
-            "--size_x", str(sx),
-            "--size_y", str(sy),
-            "--size_z", str(sz),
-            "--exhaustiveness", str(exhaustiveness),
-            "--num_modes", str(num_modes),
-            "--out", out_path,
-        ]
+    delta_delta = round(active_affinity - inactive_affinity, 3)
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Vina timed out after 120 s")
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Vina exited with code {result.returncode}:\n{result.stderr}"
-            )
-
-        output = result.stdout + result.stderr
-        affinity = _parse_vina_output(output)
-        if affinity is None:
-            raise RuntimeError(
-                f"Could not parse Vina affinity from output:\n{output}"
-            )
-
-        # Count poses in output file
-        poses = 0
-        if os.path.exists(out_path):
-            with open(out_path) as f:
-                poses = f.read().count("MODEL")
-
-        return {
-            "affinity_kcal_mol": affinity,
-            "num_modes": poses,
-            "warning": warning,
-        }
+    return {
+        "affinity_kcal_mol": active_affinity,
+        "inactive_affinity_kcal_mol": inactive_affinity,
+        "delta_delta_score": delta_delta,
+        "num_modes": active_poses,
+        "active_receptor": "7VDH chain R (Gq-coupled active state)",
+        "inactive_receptor": "AlphaFold2 Q96LB1 (inactive-like)",
+        "warning": None,
+    }
