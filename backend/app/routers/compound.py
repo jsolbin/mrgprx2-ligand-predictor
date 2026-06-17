@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
@@ -12,8 +14,9 @@ from app.services.compound_service import (
     search_compound as search_compound_service,
     unknown_compound_response,
 )
-from app.services.docking_service import run_docking
 from app.services.structure_file import parse_structure_file
+
+_DOCKING_ENABLED = os.getenv("ENABLE_DOCKING", "true").lower() == "true"
 
 router = APIRouter(prefix="/compound", tags=["compound"])
 
@@ -42,7 +45,18 @@ def dock_compound(body: DockingRequest) -> DockingResponse:
 
     Returns the best binding affinity (kcal/mol; more negative = stronger).
     Typical range for binders: −5 to −10 kcal/mol.
+    Disabled when ENABLE_DOCKING=false (e.g. memory-constrained deployments).
     """
+    if not _DOCKING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "DOCKING_UNAVAILABLE: AutoDock Vina is disabled on this server "
+                "due to memory constraints (free-tier deployment). "
+                "Please enter the docking score manually, or run the backend locally."
+            ),
+        )
+    from app.services.docking_service import run_docking  # lazy import — saves ~150 MB on startup
     try:
         result = run_docking(body.smiles, exhaustiveness=body.exhaustiveness)
     except FileNotFoundError as exc:

@@ -18,11 +18,12 @@ app = FastAPI(
 def _create_tables() -> None:
     init_db()
 
-frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+_raw_origins = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+allow_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_origin],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

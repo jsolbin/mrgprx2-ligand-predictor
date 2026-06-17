@@ -643,16 +643,27 @@ export function SearchWorkspace() {
                   )}
                   {dockingError && (
                     <div className={`rounded-lg px-3 py-2 text-[13px] space-y-1 ${
-                      dockingError.includes("manually")
+                      dockingError.includes("DOCKING_UNAVAILABLE")
+                        ? "bg-[#f0f4ff] border border-[#93c5fd] text-[#1e3a8a]"
+                        : dockingError.includes("manually")
                         ? "bg-[#fffbeb] border border-[#fcd34d] text-[#92400e]"
                         : "bg-[#fef2f2] border border-[#fca5a5] text-[#991b1b]"
                     }`}>
-                      {dockingError.includes("manually") ? (
+                      {dockingError.includes("DOCKING_UNAVAILABLE") ? (
+                        <>
+                          <div className="font-medium">AutoDock Vina is not available on the cloud deployment.</div>
+                          <div className="text-[12px]">
+                            The free-tier server does not have enough memory to run AutoDock Vina (requires &gt;512 MB).
+                            To use docking: run the backend locally, or enter a pre-computed score manually below.
+                            The structure-based ML prediction works without docking.
+                          </div>
+                        </>
+                      ) : dockingError.includes("manually") ? (
                         <>
                           <div className="font-medium">AutoDock Vina could not prepare this molecule for 3D docking.</div>
                           <div className="text-[12px]">
                             This SMILES uses aromatic lactone/chromone notation that RDKit cannot embed into 3D coordinates.
-                            Please enter the docking score manually in the field below (from an external docking tool), or leave it blank to use the structure-only prediction.
+                            Please enter the docking score manually in the field below, or leave it blank to use the structure-only prediction.
                           </div>
                         </>
                       ) : (
@@ -662,7 +673,11 @@ export function SearchWorkspace() {
                   )}
                 </div>
                 <Field
-                  label={dockingError?.includes("manually") ? "Docking Score (kcal/mol) — enter manually" : "Docking Score (kcal/mol)"}
+                  label={
+                    dockingError?.includes("DOCKING_UNAVAILABLE") ? "Docking Score (kcal/mol) — enter manually"
+                    : dockingError?.includes("manually") ? "Docking Score (kcal/mol) — enter manually"
+                    : "Docking Score (kcal/mol)"
+                  }
                   value={experimentalData.dockingScore}
                   onChange={(value) =>
                     updateExperimentalData("dockingScore", value)
