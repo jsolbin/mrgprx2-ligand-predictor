@@ -3,6 +3,8 @@ from fastapi.responses import Response
 
 from app.schemas import (
     CompoundSearchResponse,
+    DockingRequest,
+    DockingResponse,
     StructureFileParseResponse,
 )
 from app.services.compound_service import (
@@ -10,6 +12,7 @@ from app.services.compound_service import (
     search_compound as search_compound_service,
     unknown_compound_response,
 )
+from app.services.docking_service import run_docking
 from app.services.structure_file import parse_structure_file
 
 router = APIRouter(prefix="/compound", tags=["compound"])
@@ -31,6 +34,24 @@ async def parse_structure_file_upload(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file was empty.")
     return parse_structure_file(file.filename or "structure", file_bytes)
+
+
+@router.post("/dock", response_model=DockingResponse)
+def dock_compound(body: DockingRequest) -> DockingResponse:
+    """Run AutoDock Vina against the MRGPRX2 orthosteric pocket (7VDH).
+
+    Returns the best binding affinity (kcal/mol; more negative = stronger).
+    Typical range for binders: −5 to −10 kcal/mol.
+    """
+    try:
+        result = run_docking(body.smiles, exhaustiveness=body.exhaustiveness)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return DockingResponse(**result)
 
 
 @router.get("/render")

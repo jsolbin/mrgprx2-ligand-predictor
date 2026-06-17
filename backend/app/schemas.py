@@ -1,6 +1,17 @@
 from pydantic import BaseModel, Field
 
 
+class DockingRequest(BaseModel):
+    smiles: str = Field(..., min_length=1)
+    exhaustiveness: int = Field(default=8, ge=1, le=32)
+
+
+class DockingResponse(BaseModel):
+    affinity_kcal_mol: float
+    num_modes: int
+    warning: str | None = None
+
+
 class CompoundSearchResponse(BaseModel):
     name: str
     cid: int | None

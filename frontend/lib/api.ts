@@ -89,6 +89,24 @@ export async function parseStructureFile(file: File) {
   return handleResponse<StructureFileParseResponse>(response);
 }
 
+export type DockingResponse = {
+  affinity_kcal_mol: number;
+  num_modes: number;
+  warning: string | null;
+};
+
+export async function dockCompound(
+  smiles: string,
+  exhaustiveness: number = 8
+): Promise<DockingResponse> {
+  const response = await fetch(new URL("/compound/dock", API_BASE_URL), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ smiles, exhaustiveness }),
+  });
+  return handleResponse<DockingResponse>(response);
+}
+
 export function getCompoundRenderUrl(query: string) {
   const url = new URL("/compound/render", API_BASE_URL);
   url.searchParams.set("name", query);
